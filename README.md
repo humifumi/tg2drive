@@ -15,7 +15,7 @@
 
 ## 环境变量
 
-所有配置均存入 GitHub Actions 的 Repository secrets；本地使用同名环境变量。
+凭据和目标地址存入 Repository secrets；并发数、等待秒数存入 Repository variables。本地使用同名环境变量。
 
 ### Telegram
 
@@ -34,7 +34,7 @@
 | `CLIENTSECRET` | Secret | 应用注册 → 证书和密码 → 新建客户端密码 → 复制 **Value（值）**；不是 Secret ID。Web 客户端必填，桌面公共客户端留空 |
 | `TENANTID` | Secret | 应用概述 → 目录（租户）ID；可留空，默认 `common` |
 | `OAUTH_REDIRECT_URI` | Secret | 应用 → 身份验证 → 添加平台及回调地址；默认 `http://localhost`，必须与注册值一致 |
-| `OAUTH_WAIT_SECONDS` | Secret | 自行设置，默认 `600`，范围 `30–1800` 秒 |
+| `OAUTH_WAIT_SECONDS` | Variable | 自行设置，默认 `600`，范围 `30–1800` 秒 |
 
 应用 API 权限添加 Microsoft Graph **委托权限** `Files.ReadWrite.All`、`Sites.Read.All`，按组织要求完成管理员同意。回调平台：有密钥使用 **Web**；无密钥使用 **移动和桌面应用**。不使用 SPA 或隐式授权。登录 SharePoint 时使用有文档库写入权限的组织账号。
 
@@ -85,10 +85,10 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 | 变量 | 位置 | 设置方式 / 默认值 |
 | --- | --- | --- |
 | `TARGET_FOLDER` | Secret | 自行设置目标文件夹，默认 `Public/Telegram`；用 `/` 分隔，支持自动创建目录 |
-| `WAIT_SECONDS` | Secret | 等待回复 `/select` 的时长，默认 `300`，范围 `30–1800` 秒 |
-| `DOWNLOAD_WORKERS` | Secret | 下载并发上限，范围 `1–8`，默认 `4`；实际并发按可用资源调整 |
+| `WAIT_SECONDS` | Variable | 等待回复 `/select` 的时长，默认 `300`，范围 `30–1800` 秒 |
+| `DOWNLOAD_WORKERS` | Variable | 下载并发上限，范围 `1–8`，默认 `4`；实际并发按可用资源调整 |
 
-目录和等待秒数统一从 Secrets 读取，手动运行不再填写配置。
+目录从 Secrets 读取，等待秒数和下载并发从 Variables 读取；手动运行不再填写配置。
 
 ## 运行行为
 

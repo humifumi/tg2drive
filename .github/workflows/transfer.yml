@@ -30,7 +30,7 @@ jobs:
           GOOGLE_REDIRECT_URI: ${{ secrets.GOOGLE_REDIRECT_URI || 'http://localhost:8080' }}
           GOOGLE_FOLDER_ID: ${{ secrets.GOOGLE_FOLDER_ID }}
           OAUTH_REDIRECT_URI: ${{ secrets.OAUTH_REDIRECT_URI || 'http://localhost' }}
-          OAUTH_WAIT_SECONDS: ${{ secrets.OAUTH_WAIT_SECONDS || '600' }}
+          OAUTH_WAIT_SECONDS: ${{ vars.OAUTH_WAIT_SECONDS || '600' }}
           TG_BOT_API_ID: ${{ secrets.TG_BOT_API_ID }}
           TG_BOT_API_HASH: ${{ secrets.TG_BOT_API_HASH }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
@@ -45,6 +45,6 @@ jobs:
           SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
           TARGET_FOLDER: ${{ secrets.TARGET_FOLDER || 'Public/Telegram' }}
-          WAIT_SECONDS: ${{ secrets.WAIT_SECONDS || '300' }}
-          DOWNLOAD_WORKERS: ${{ secrets.DOWNLOAD_WORKERS || '4' }}
+          WAIT_SECONDS: ${{ vars.WAIT_SECONDS || '300' }}
+          DOWNLOAD_WORKERS: ${{ vars.DOWNLOAD_WORKERS || '4' }}
         run: python transfer.py
