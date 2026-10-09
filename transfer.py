@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import MemorySession
 
-from onedrive import CHUNK_SIZE, OneDrive, folder_parts, required, sharepoint_configured
+from onedrive import CHUNK_SIZE, OneDrive, folder_parts, required
 from oauth import cached_login
 from progress import TransferProgress, configure_logs, format_bytes, logger
 
@@ -132,14 +132,6 @@ async def main():
     folder = os.environ.get('TARGET_FOLDER', 'Public/Telegram')
     folder_parts(folder)
     required('CLIENTID')
-    auth_mode = os.environ.get('AUTH_MODE', 'oauth').strip().lower()
-    if auth_mode not in ('oauth', 'auto'):
-        raise ValueError('AUTH_MODE 必须是 oauth 或 auto')
-    if auth_mode == 'auto' and not os.environ.get('REFRESH_TOKEN', '').strip():
-        for key in ('TENANTID', 'CLIENTSECRET'):
-            required(key)
-        if not sharepoint_configured():
-            required('ONEDRIVE_USER_PRINCIPAL_NAME')
     client = TelegramClient(MemorySession(), int(required('TG_BOT_API_ID')),
                             required('TG_BOT_API_HASH'))
     selected = asyncio.get_running_loop().create_future()
@@ -160,7 +152,7 @@ async def main():
         logger.info('正在连接 Telegram 机器人')
         await client.start(bot_token=required('TG_BOT_TOKEN'))
         logger.info('Telegram 已连接 | 开始存储账号授权')
-        access_token = await cached_login(client, owner) if auth_mode == 'oauth' else None
+        access_token = await cached_login(client, owner)
         logger.info('等待选择文件 | %s 秒内回复附件 /select', wait)
         await client.send_message(owner,
             f'转存已启动。请在 {wait} 秒内发送或转发文件到此私聊，再回复该文件 /select。',

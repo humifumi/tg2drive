@@ -24,11 +24,6 @@ def folder_parts(folder):
     return parts
 
 
-def sharepoint_configured():
-    return any(os.environ.get(key, '').strip() for key in
-               ('SHAREPOINT_DRIVE_ID', 'SHAREPOINT_SITE_ID', 'SHAREPOINT_SITE_URL'))
-
-
 def site_lookup_url(site_url):
     site = urlsplit(site_url)
     if (site.scheme != 'https' or not site.hostname or site.username or site.password
@@ -47,12 +42,11 @@ def re_site_path(path):
 
 
 class OneDrive:
-    def __init__(self, access_token=None):
-        if access_token is None:
-            self.token, self.drive = self.acquire_token()
-        else:
-            self.token = access_token
-            self.drive = f'{GRAPH}/me/drive'
+    def __init__(self, access_token):
+        if not access_token:
+            raise ValueError('必须先通过 OAuth 获取 access token')
+        self.token = access_token
+        self.drive = f'{GRAPH}/me/drive'
         drive_id = os.environ.get('SHAREPOINT_DRIVE_ID', '').strip()
         site_id = os.environ.get('SHAREPOINT_SITE_ID', '').strip()
         site_url = os.environ.get('SHAREPOINT_SITE_URL', '').strip()
@@ -66,32 +60,6 @@ class OneDrive:
                     raise RuntimeError(f'解析 SharePoint 站点失败（HTTP {response.status_code}）')
                 site_id = response.json()['id']
             self.drive = f'{GRAPH}/sites/{quote(site_id, safe="")}/drive'
-
-    def acquire_token(self):
-        client_id = required('CLIENTID')
-        refresh = os.environ.get('REFRESH_TOKEN', '').strip()
-        data = {'client_id': client_id}
-        secret = os.environ.get('CLIENTSECRET', '').strip()
-        if secret:
-            data['client_secret'] = secret
-        if refresh:
-            tenant = os.environ.get('TENANTID') or 'common'
-            data.update(grant_type='refresh_token', refresh_token=refresh)
-            self.drive = f'{GRAPH}/me/drive'
-        else:
-            tenant = required('TENANTID')
-            data.update(grant_type='client_credentials',
-                        client_secret=required('CLIENTSECRET'),
-                        scope='https://graph.microsoft.com/.default')
-            if not sharepoint_configured():
-                user = quote(required('ONEDRIVE_USER_PRINCIPAL_NAME'), safe='')
-                self.drive = f'{GRAPH}/users/{user}/drive'
-        response = self.request('POST',
-            f'https://login.microsoftonline.com/{quote(tenant, safe="")}/oauth2/v2.0/token',
-            data=data)
-        if response.status_code != 200:
-            raise RuntimeError(f'OneDrive 获取令牌失败（HTTP {response.status_code}），请检查凭据')
-        return response.json()['access_token'], getattr(self, 'drive', f'{GRAPH}/me/drive')
 
     @staticmethod
     def request(method, url, **kwargs):

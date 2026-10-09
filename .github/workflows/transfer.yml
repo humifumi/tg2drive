@@ -3,15 +3,6 @@ name: Telegram to SharePoint / OneDrive
 on:
   workflow_dispatch:
     inputs:
-      auth_mode:
-        description: oauth 通过 Telegram 登录；auto 使用已有 refresh token 或应用凭据
-        default: configured
-        required: true
-        type: choice
-        options:
-          - configured
-          - oauth
-          - auto
       folder:
         description: 文档库内的目标目录（留空使用仓库配置）
         required: false
@@ -42,7 +33,6 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: 下载并转存
         env:
-          AUTH_MODE: ${{ inputs.auth_mode != 'configured' && inputs.auth_mode || vars.AUTH_MODE || 'oauth' }}
           OAUTH_REDIRECT_URI: ${{ vars.OAUTH_REDIRECT_URI || 'http://localhost' }}
           OAUTH_WAIT_SECONDS: ${{ vars.OAUTH_WAIT_SECONDS || '600' }}
           TG_BOT_API_ID: ${{ secrets.TG_BOT_API_ID }}
@@ -52,11 +42,9 @@ jobs:
           CLIENTID: ${{ secrets.CLIENTID }}
           CLIENTSECRET: ${{ secrets.CLIENTSECRET }}
           TENANTID: ${{ secrets.TENANTID }}
-          REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
           GIST_ID: ${{ vars.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ENCRYPTION_KEY: ${{ secrets.GIST_ENCRYPTION_KEY }}
-          ONEDRIVE_USER_PRINCIPAL_NAME: ${{ secrets.ONEDRIVE_USER_PRINCIPAL_NAME }}
           SHAREPOINT_SITE_URL: ${{ vars.SHAREPOINT_SITE_URL || 'https://humilr.sharepoint.com' }}
           SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}

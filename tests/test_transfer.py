@@ -57,46 +57,32 @@ class TransferTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 drive.upload(path, 'Public')
 
-    def test_application_auth_uses_named_user_drive(self):
-        env = {'CLIENTID': 'id', 'CLIENTSECRET': 'secret', 'TENANTID': 'tenant',
-               'ONEDRIVE_USER_PRINCIPAL_NAME': 'user@example.com'}
-        with patch.dict('os.environ', env, clear=True), patch.object(
-                OneDrive, 'request', return_value=response(200, {'access_token': 'token'})) as request:
-            drive = OneDrive()
-        self.assertIn('/users/user%40example.com/drive', drive.drive)
-        self.assertEqual(request.call_args.kwargs['data']['grant_type'], 'client_credentials')
-
-    def test_refresh_auth_uses_me_drive(self):
-        with patch.dict('os.environ', {'CLIENTID': 'id', 'REFRESH_TOKEN': 'refresh'}, clear=True), patch.object(
-                OneDrive, 'request', return_value=response(200, {'access_token': 'token'})):
-            self.assertTrue(OneDrive().drive.endswith('/me/drive'))
+    def test_access_token_required(self):
+        with self.assertRaises(ValueError):
+            OneDrive('')
 
     def test_sharepoint_root_site_resolves_without_user_upn(self):
-        env = {'CLIENTID': 'id', 'CLIENTSECRET': 'secret', 'TENANTID': 'tenant',
-               'SHAREPOINT_SITE_URL': 'https://humilr.sharepoint.com'}
+        env = {'SHAREPOINT_SITE_URL': 'https://humilr.sharepoint.com'}
         with patch.dict('os.environ', env, clear=True), patch.object(OneDrive, 'request', side_effect=[
-                response(200, {'access_token': 'token'}),
                 response(200, {'id': 'host,site,web'})]) as request:
-            drive = OneDrive()
+            drive = OneDrive("access")
         self.assertEqual(request.call_args.args, ('GET', f'{GRAPH}/sites/humilr.sharepoint.com'))
         self.assertEqual(drive.drive, f'{GRAPH}/sites/host%2Csite%2Cweb/drive')
 
     def test_sharepoint_drive_id_has_priority_over_site_url(self):
-        env = {'CLIENTID': 'id', 'REFRESH_TOKEN': 'refresh',
-               'SHAREPOINT_DRIVE_ID': 'b!library', 'SHAREPOINT_SITE_URL': 'invalid'}
+        env = {'SHAREPOINT_DRIVE_ID': 'b!library', 'SHAREPOINT_SITE_URL': 'invalid'}
         with patch.dict('os.environ', env, clear=True), patch.object(OneDrive, 'request',
                 return_value=response(200, {'access_token': 'token'})) as request:
-            drive = OneDrive()
+            drive = OneDrive("access")
         self.assertEqual(drive.drive, f'{GRAPH}/drives/b%21library')
-        self.assertEqual(request.call_count, 1)
+        request.assert_not_called()
 
     def test_sharepoint_site_id_skips_lookup(self):
-        env = {'CLIENTID': 'id', 'CLIENTSECRET': 'secret', 'TENANTID': 'tenant',
-               'SHAREPOINT_SITE_ID': 'site-id'}
+        env = {'SHAREPOINT_SITE_ID': 'site-id'}
         with patch.dict('os.environ', env, clear=True), patch.object(OneDrive, 'request',
                 return_value=response(200, {'access_token': 'token'})) as request:
-            self.assertEqual(OneDrive().drive, f'{GRAPH}/sites/site-id/drive')
-        self.assertEqual(request.call_count, 1)
+            self.assertEqual(OneDrive("access").drive, f'{GRAPH}/sites/site-id/drive')
+        request.assert_not_called()
 
     def test_site_url_requires_site_rather_than_library_link(self):
         self.assertEqual(site_lookup_url('https://tenant.sharepoint.com/sites/中文'),
