@@ -45,7 +45,7 @@ jobs:
           GIST_ID: ${{ vars.GIST_ID }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ENCRYPTION_KEY: ${{ secrets.GIST_ENCRYPTION_KEY }}
-          SHAREPOINT_SITE_URL: ${{ vars.SHAREPOINT_SITE_URL || 'https://humilr.sharepoint.com' }}
+          SHAREPOINT_SITE_URL: ${{ vars.SHAREPOINT_SITE_URL }}
           SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
           TARGET_FOLDER: ${{ inputs.folder || vars.TARGET_FOLDER || 'Public/Telegram' }}
