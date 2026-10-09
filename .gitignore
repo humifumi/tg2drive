@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.session*
+.env
+.ven.local
+downloads/
+token.json

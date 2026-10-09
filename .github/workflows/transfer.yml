@@ -1,0 +1,63 @@
+name: Telegram to SharePoint / OneDrive
+
+on:
+  workflow_dispatch:
+    inputs:
+      auth_mode:
+        description: oauth 通过 Telegram 登录；auto 使用已有 refresh token 或应用凭据
+        default: oauth
+        required: true
+        type: choice
+        options:
+          - oauth
+          - auto
+      folder:
+        description: 文档库内的目标目录
+        default: Public/Telegram
+        required: true
+        type: string
+      wait_seconds:
+        description: 等待选择文件的秒数（30–1800）
+        default: '300'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-to-onedrive
+  cancel-in-progress: false
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: 安装依赖
+        run: python -m pip install -r requirements.txt
+      - name: 下载并转存
+        env:
+          AUTH_MODE: ${{ inputs.auth_mode }}
+          OAUTH_REDIRECT_URI: ${{ vars.OAUTH_REDIRECT_URI || 'http://localhost' }}
+          OAUTH_WAIT_SECONDS: '600'
+          TG_BOT_API_ID: ${{ secrets.TG_BOT_API_ID }}
+          TG_BOT_API_HASH: ${{ secrets.TG_BOT_API_HASH }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_BOT_CREATOR_ID: ${{ secrets.TG_BOT_CREATOR_ID }}
+          CLIENTID: ${{ secrets.CLIENTID }}
+          CLIENTSECRET: ${{ secrets.CLIENTSECRET }}
+          TENANTID: ${{ secrets.TENANTID }}
+          REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
+          ONEDRIVE_USER_PRINCIPAL_NAME: ${{ secrets.ONEDRIVE_USER_PRINCIPAL_NAME }}
+          SHAREPOINT_SITE_URL: ${{ vars.SHAREPOINT_SITE_URL || 'https://humilr.sharepoint.com' }}
+          SHAREPOINT_SITE_ID: ${{ secrets.SHAREPOINT_SITE_ID }}
+          SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
+          TARGET_FOLDER: ${{ inputs.folder }}
+          WAIT_SECONDS: ${{ inputs.wait_seconds }}
+        run: python transfer.py
