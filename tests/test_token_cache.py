@@ -27,6 +27,18 @@ class CacheTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.cache.load()
 
+    def test_google_cache_is_separate_from_microsoft(self):
+        google = GistTokenCache(context={'provider': 'google', 'client_id': 'google-client'},
+                                filename='tg2drive-google-token.json')
+        google.request = Mock(return_value={})
+        google.save('google-refresh')
+        payload = google.request.call_args.kwargs['json']
+        self.assertNotIn(FILENAME, payload['files'])
+        google.request.return_value = payload
+        self.assertEqual(google.load(), 'google-refresh')
+        self.cache.request = Mock(return_value=payload)
+        self.assertIsNone(self.cache.load())
+
     def test_refresh_revoked_grant_needs_login_but_invalid_client_fails(self):
         response = Mock(status_code=400)
         response.json.return_value = {'error': 'invalid_grant'}

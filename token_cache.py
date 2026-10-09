@@ -12,7 +12,8 @@ FILENAME = 'tg2drive-token.json'
 
 
 class GistTokenCache:
-    def __init__(self):
+    def __init__(self, context=None, filename=FILENAME):
+        self.filename = filename
         self.gist_id = required('GIST_ID')
         if not re.fullmatch(r'[0-9a-fA-F]+', self.gist_id):
             raise ValueError('GIST_ID 格式无效')
@@ -21,7 +22,7 @@ class GistTokenCache:
             self.cipher = Fernet(required('GIST_ENCRYPTION_KEY').encode())
         except (ValueError, TypeError):
             raise ValueError('GIST_ENCRYPTION_KEY 格式无效') from None
-        self.context = {'client_id': required('CLIENTID'),
+        self.context = context if context is not None else {'client_id': required('CLIENTID'),
                         'tenant': os.environ.get('TENANTID', '').strip() or 'common'}
 
     def request(self, method, **kwargs):
@@ -38,7 +39,7 @@ class GistTokenCache:
         return response.json()
 
     def load(self):
-        item = self.request('GET').get('files', {}).get(FILENAME)
+        item = self.request('GET').get('files', {}).get(self.filename)
         if not item:
             return None
         if item.get('truncated'):
@@ -60,5 +61,5 @@ class GistTokenCache:
             raise RuntimeError('OAuth 未返回 refresh_token，无法保存登录状态')
         data = {**self.context, 'refresh_token': refresh_token}
         encrypted = self.cipher.encrypt(json.dumps(data).encode()).decode()
-        self.request('PATCH', json={'files': {FILENAME: {
+        self.request('PATCH', json={'files': {self.filename: {
             'content': json.dumps({'version': 1, 'encrypted': encrypted})}}})

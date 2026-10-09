@@ -100,9 +100,9 @@ class OAuthFlow:
         return tokens
 
 
-async def telegram_login(client, owner, return_tokens=False):
-    logger.info('需要微软登录 | 授权链接将发送至 Telegram 私聊')
-    flow = OAuthFlow()
+async def telegram_login(client, owner, return_tokens=False, flow=None, provider="微软"):
+    logger.info('需要%s登录 | 授权链接将发送至 Telegram 私聊', provider)
+    flow = flow or OAuthFlow()
     wait = int(os.environ.get('OAUTH_WAIT_SECONDS', '600'))
     if not 30 <= wait <= 1800:
         raise ValueError('OAUTH_WAIT_SECONDS 必须在 30–1800 之间')
@@ -128,7 +128,7 @@ async def telegram_login(client, owner, return_tokens=False):
     client.add_event_handler(receive, builder)
     try:
         await client.send_message(owner,
-            f'请在 {wait} 秒内打开以下链接，在本地浏览器登录微软账号。\n'
+            f'请在 {wait} 秒内打开以下链接，在本地浏览器登录{provider}账号。\n'
             '登录后会跳转 localhost，即使页面无法打开，也请复制地址栏完整 URI，发送到本私聊。\n'
             '也可以发送：/oauth 完整URI\n\n' + flow.authorize_url(),
             parse_mode=None, link_preview=False)
@@ -142,8 +142,8 @@ async def telegram_login(client, owner, return_tokens=False):
         except RuntimeError as exc:
             await client.send_message(owner, str(exc), parse_mode=None)
             raise
-        await client.send_message(owner, '微软授权成功，本次运行将使用该账号转存文件。')
-        logger.info('微软授权成功')
+        await client.send_message(owner, f'{provider}授权成功，本次运行将使用该账号转存文件。')
+        logger.info('%s授权成功', provider)
         return tokens if return_tokens else tokens['access_token']
     finally:
         client.remove_event_handler(receive, builder)

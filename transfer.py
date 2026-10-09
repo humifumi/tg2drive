@@ -12,6 +12,8 @@ from telethon.sessions import MemorySession
 
 from onedrive import CHUNK_SIZE, OneDrive, folder_parts, required
 from oauth import cached_login
+from google_oauth import cached_login as google_login
+from googledrive import GoogleDrive
 from progress import TransferProgress, configure_logs, format_bytes, logger
 from buffering import buffer_plan
 
@@ -51,7 +53,7 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
     downloaded = 0
     active = 0
     finished = 0
-    logger.info('多路下载已启动 | %s 路 | 最多 %s 片在途 | 临时磁盘缓存 | OneDrive 顺序上传', workers, plan.slots)
+    logger.info('多路下载已启动 | %s 路 | 最多 %s 片在途 | 临时磁盘缓存 | 目标网盘顺序上传', workers, plan.slots)
 
     async def disk_io(function, *args):
         task = asyncio.create_task(asyncio.to_thread(function, *args))
@@ -130,7 +132,7 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
                 await disk_io(lambda: path.unlink(missing_ok=True))
                 slots.release()
         if uploaded != size or session.item is None:
-            raise RuntimeError('OneDrive 未确认上传完成')
+            raise RuntimeError('目标网盘未确认上传完成')
         progress.upload_state = '上传完成'
 
     async def report():
@@ -176,7 +178,10 @@ async def main():
         raise ValueError('WAIT_SECONDS 必须在 30–1800 之间')
     folder = os.environ.get('TARGET_FOLDER', 'Public/Telegram')
     folder_parts(folder)
-    required('CLIENTID')
+    provider = os.environ.get('STORAGE_PROVIDER', 'onedrive').strip().lower()
+    if provider not in ('onedrive', 'google'):
+        raise ValueError('STORAGE_PROVIDER 必须为 onedrive 或 google')
+    required('GOOGLE_CLIENT_ID' if provider == 'google' else 'CLIENTID')
     client = TelegramClient(MemorySession(), int(required('TG_BOT_API_ID')),
                             required('TG_BOT_API_HASH'))
     selected = asyncio.get_running_loop().create_future()
@@ -197,7 +202,7 @@ async def main():
         logger.info('正在连接 Telegram 机器人')
         await client.start(bot_token=required('TG_BOT_TOKEN'))
         logger.info('Telegram 已连接 | 开始存储账号授权')
-        access_token = await cached_login(client, owner)
+        access_token = await (google_login(client, owner) if provider == "google" else cached_login(client, owner))
         logger.info('等待选择文件 | %s 秒内回复附件 /select', wait)
         await client.send_message(owner,
             f'转存已启动。请在 {wait} 秒内发送或转发文件到此私聊，再回复该文件 /select。',
@@ -211,7 +216,7 @@ async def main():
         status = await client.send_message(owner, f'正在分片转存：{name}（每片 10 MiB）', parse_mode=None)
         try:
             logger.info('文件已选定 | 正在连接目标文档库')
-            drive = await asyncio.to_thread(OneDrive, access_token)
+            drive = await asyncio.to_thread(GoogleDrive if provider == "google" else OneDrive, access_token)
             async def update_status(text):
                 await status.edit(f'正在转存：{name}\n{text}', parse_mode=None)
 
@@ -222,7 +227,7 @@ async def main():
             summary = os.environ.get('GITHUB_STEP_SUMMARY')
             if summary:
                 with open(summary, 'a', encoding='utf-8') as stream:
-                    stream.write('Telegram 文件已成功转存至 OneDrive，详情请查看机器人消息。\n')
+                    stream.write('Telegram 文件已成功转存至目标网盘，详情请查看机器人消息。\n')
         except Exception:
             await client.send_message(owner, '转存失败，请查看 GitHub Actions 日志。')
             raise

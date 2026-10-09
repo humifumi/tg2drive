@@ -1,12 +1,12 @@
 # tg2drive
 
-用 GitHub Actions 将 Telegram 附件转存至 OneDrive / SharePoint。支持多路下载、顺序分片上传、自动资源缓冲、TG 进度通知和 Gist 加密登录缓存。
+用 GitHub Actions 将 Telegram 附件转存至 OneDrive / SharePoint / Google Drive。支持多路下载、顺序分片上传、自动资源缓冲、TG 进度通知和 Gist 加密登录缓存。
 
 ## 使用
 
 1. 在仓库 **Settings → Secrets and variables → Actions** 配置下表；本地运行填写 `.ven.local`。
 2. 给机器人发送 `/start`，在 Actions 中运行 **Telegram to SharePoint / OneDrive**。
-3. 无有效登录缓存时，打开机器人发来的微软授权链接，在本地浏览器登录，将地址栏完整回调 URI 发回机器人（也可发送 `/oauth 完整URI`）。
+3. 无有效登录缓存时，打开机器人发来的授权链接，在本地浏览器登录，将地址栏完整回调 URI 发回机器人（也可发送 `/oauth 完整URI`）。
 4. 将附件发送或转发给机器人，回复附件 `/select`；完成后机器人返回文件链接。
 
 仅指定用户的私聊可选择附件。回调 URI 包含授权码，程序通过 OAuth + PKCE 换取 token。Gist 缓存有效时自动登录，不需要手工填写刷新 token。
@@ -61,6 +61,22 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 | `SHAREPOINT_DRIVE_ID` | Secret | Graph Explorer → `GET /v1.0/sites/{site-id}/drives` → 找到目标文档库，复制其 `id` |
 
 三项不必全部填写。优先级：Drive ID → Site ID → Site URL → 登录用户的 OneDrive。Site ID / URL 使用站点默认文档库。目标文件夹路径相对于文档库根目录，不包含文档库名称。文件沿用现有访问权限，不自动创建匿名分享。
+
+### Google Drive（可选）
+
+所有项目同样填入 Repository secrets；本地填 `.ven.local`。默认仍为 OneDrive。
+
+| 变量 | 位置 | 获取步骤 / 默认值 |
+| --- | --- | --- |
+| `STORAGE_PROVIDER` | Secret | `onedrive`（默认）或 `google`；选择 `google` 后无需微软客户端配置 |
+| `GOOGLE_CLIENT_ID` | Secret | [Google Cloud Console](https://console.cloud.google.com/) → 新建项目 → 启用 [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com) → [Google Auth Platform](https://console.cloud.google.com/auth/clients) → 创建 **桌面应用** OAuth 客户端 → 客户端 ID |
+| `GOOGLE_CLIENT_SECRET` | Secret | 同一桌面客户端 → 下载 JSON → 复制 `client_secret` |
+| `GOOGLE_REDIRECT_URI` | Secret | 默认 `http://localhost:8080`，桌面应用使用 localhost 回调；登录后复制地址栏完整 URI 发回 TG |
+| `GOOGLE_FOLDER_ID` | Secret | 可留空（我的云端硬盘根目录）；指定文件夹时，复制 `https://drive.google.com/drive/folders/文件夹ID` 的最后一段 |
+
+在 Google Auth Platform 配置受众及测试用户，添加范围 `https://www.googleapis.com/auth/drive`（用于定位已有目标文件夹并创建子目录）。外部应用处于 Testing 时，刷新 token 通常 7 天过期；正式使用需按 Google 要求发布应用及处理权限验证。参考：[Google OAuth](https://developers.google.com/identity/protocols/oauth2/native-app)。
+
+`TARGET_FOLDER` 在 `GOOGLE_FOLDER_ID` 下创建或复用。支持有写入权限的共享云端硬盘目录；同名文件新建，不覆盖。Google 登录缓存使用同一 Gist 的独立加密文件 `tg2drive-google-token.json`，不会替换微软缓存。上传使用 [Google resumable upload](https://developers.google.com/workspace/drive/api/guides/manage-uploads)，每片 10 MiB，顺序上传，不创建公开分享链接。
 
 ### 转存设置
 
