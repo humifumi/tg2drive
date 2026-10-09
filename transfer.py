@@ -2,7 +2,6 @@
 import asyncio
 import os
 import re
-import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,6 +12,8 @@ from telethon.sessions import MemorySession
 from onedrive import CHUNK_SIZE, OneDrive, folder_parts, required, sharepoint_configured
 from oauth import cached_login
 from progress import TransferProgress, configure_logs, format_bytes, logger
+
+PROGRESS_INTERVAL = 10
 
 
 def safe_name(name, message_id):
@@ -41,7 +42,9 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
     async def produce():
         downloaded = 0
         while downloaded < size:
+            progress.download_state = '等待缓冲空间'
             await slots.acquire()
+            progress.download_state = '下载中'
             buffer = bytearray()
             target = min(CHUNK_SIZE, size - downloaded)
             while len(buffer) < target:
@@ -57,15 +60,18 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
             await queue.put(buffer)
             # Transfer ownership; never modify an enqueued block.
             del buffer
+        progress.download_state = '下载完成'
         await queue.put(None)
 
     async def consume():
         uploaded = 0
         while True:
+            progress.upload_state = '等待下载分片'
             block = await queue.get()
             if block is None:
                 break
             try:
+                progress.upload_state = '上传中（失败时自动重试）'
                 progress.upload_start()
                 upload = asyncio.create_task(asyncio.to_thread(session.upload_chunk, block))
                 try:
@@ -76,16 +82,24 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
                     await asyncio.gather(upload, return_exceptions=True)
                     raise
                 uploaded += len(block)
-                text = progress.upload_done(uploaded)
+                progress.upload_done(uploaded)
             finally:
                 del block
                 slots.release()
-            if on_progress:
-                await on_progress(text)
         if uploaded != size or session.item is None:
             raise RuntimeError('OneDrive 未确认上传完成')
+        progress.upload_state = '上传完成'
+
+    async def report():
+        while True:
+            try:
+                await on_progress(progress.telegram_text())
+            except Exception:
+                logger.warning('Telegram 进度消息更新失败，转存继续')
+            await asyncio.sleep(PROGRESS_INTERVAL)
 
     tasks = [asyncio.create_task(produce()), asyncio.create_task(consume())]
+    reporter = asyncio.create_task(report()) if on_progress else None
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         for task in tasks:
@@ -93,6 +107,9 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
                 task.result()
         return session.item
     finally:
+        if reporter:
+            reporter.cancel()
+            await asyncio.gather(reporter, return_exceptions=True)
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -158,17 +175,8 @@ async def main():
         try:
             logger.info('文件已选定 | 正在连接目标文档库')
             drive = await asyncio.to_thread(OneDrive, access_token)
-            last_update = time.monotonic()
-
             async def update_status(text):
-                nonlocal last_update
-                if time.monotonic() - last_update < 10:
-                    return
-                try:
-                    await status.edit(f'正在转存：{name}\n{text}', parse_mode=None)
-                except Exception:
-                    logger.warning('Telegram 进度消息更新失败，转存继续；详情请查看日志')
-                last_update = time.monotonic()
+                await status.edit(f'正在转存：{name}\n{text}', parse_mode=None)
 
             item = await stream_transfer(client, message, drive, name, folder, update_status)
             url = item.get('webUrl', '')

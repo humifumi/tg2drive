@@ -117,4 +117,4 @@ python -m unittest discover -s tests -v
 本地执行 `python transfer.py` 会自动读取同目录 `.ven.local`，已设置的环境变量优先。文件被 Git 忽略。Action 继续从 Secrets / Variables 读取配置。
 
 参考：[Telethon 文档](https://docs.telethon.dev/en/stable/modules/client.html)、[Microsoft Graph 分片上传](https://learn.microsoft.com/graph/api/driveitem-createuploadsession)。
-- 日志显示时间、登录/缓存阶段、当前下载和上传状态、分片序号、已上传百分比、平均转存速度及预计剩余时间。百分比按 OneDrive 确认上传的字节计算，平均速度包含下载和上传耗时；Telegram 状态消息最多每 10 秒更新一次，下载日志最多每 5 秒一次。重试会显示原因和等待时间，不输出 token 或 OAuth 回调 URI。
+- 日志显示时间、登录/缓存阶段、当前下载和上传状态、分片序号、已上传百分比、平均转存速度及预计剩余时间。百分比按 OneDrive 确认上传的字节计算，平均速度包含下载和上传耗时；Telegram 机器人每 10 秒编辑同一条状态消息，分别显示下载和上传百分比、已传大小、缓冲等待状态、分片完成数、速度及预计剩余时间。下载或上传单片耗时较长时也会更新，消息更新失败不影响文件转存。下载日志最多每 5 秒一次。重试会显示原因和等待时间，不输出 token 或 OAuth 回调 URI。

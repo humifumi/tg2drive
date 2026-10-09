@@ -34,6 +34,23 @@ class TransferProgress:
         self.last_log = self.started - 5
         self.uploaded = 0
         self.downloaded = 0
+        self.download_state = '准备下载'
+        self.upload_state = '等待第一片'
+
+    def telegram_text(self):
+        elapsed = max(time.monotonic() - self.started, 0.001)
+        rate = self.uploaded / elapsed
+        eta = format_duration((self.total - self.uploaded) / rate) if rate else '估算中'
+        downloaded = self.downloaded / self.total * 100 if self.total else 100
+        uploaded = min(self.uploaded / self.total * 100, 99.9) if self.uploaded < self.total else 100
+        count = (self.total + self.chunk_size - 1) // self.chunk_size
+        complete = (self.uploaded + self.chunk_size - 1) // self.chunk_size
+        return (f'下载 {downloaded:.1f}%：{format_bytes(self.downloaded)} / {format_bytes(self.total)}\n'
+                f'上传 {uploaded:.1f}%：{format_bytes(self.uploaded)} / {format_bytes(self.total)}\n'
+                f'下载状态：{self.download_state}\n上传状态：{self.upload_state}\n'
+                f'已上传分片：{complete}/{count}\n'
+                f'平均转存速度：{format_bytes(rate)}/s\n'
+                f'已用：{format_duration(elapsed)} · 预计剩余：{eta}')
 
     def text(self, stage):
         elapsed = max(time.monotonic() - self.started, 0.001)

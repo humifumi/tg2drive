@@ -221,6 +221,51 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await stream_transfer(client, message, drive, 'empty', 'Public'), {'name': 'empty'})
         client.iter_download.assert_not_called()
 
+    async def test_bot_progress_updates_while_download_is_waiting(self):
+        client, message, drive, trace, uploads = await self.transfer_fixture(4, [b'tail'])
+        original = client.iter_download.return_value
+        release = asyncio.Event()
+        reported = asyncio.Event()
+        texts = []
+
+        class SlowIterator:
+            async def __anext__(self):
+                await release.wait()
+                return await original.__anext__()
+
+            async def close(self):
+                await original.close()
+
+        client.iter_download.return_value = SlowIterator()
+
+        async def update(text):
+            texts.append(text)
+            if len(texts) >= 2:
+                reported.set()
+
+        with patch('transfer.PROGRESS_INTERVAL', 0.01):
+            task = asyncio.create_task(stream_transfer(client, message, drive, 'file.bin', 'Public', update))
+            try:
+                await asyncio.wait_for(reported.wait(), 2)
+                self.assertIn('下载 0.0%', texts[-1])
+                self.assertIn('上传 0.0%', texts[-1])
+                self.assertEqual(uploads, [])
+            finally:
+                release.set()
+                await asyncio.wait_for(task, 2)
+        count = len(texts)
+        await asyncio.sleep(0.02)
+        self.assertEqual(len(texts), count)
+
+    async def test_bot_update_failure_does_not_abort_transfer(self):
+        client, message, drive, trace, uploads = await self.transfer_fixture(4, [b'tail'])
+
+        async def update(text):
+            raise RuntimeError('message unavailable')
+
+        item = await stream_transfer(client, message, drive, 'file.bin', 'Public', update)
+        self.assertEqual(item['name'], 'file.bin')
+
 
 if __name__ == '__main__':
     unittest.main()
