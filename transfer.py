@@ -10,7 +10,7 @@ from telethon import TelegramClient, events
 from telethon.sessions import MemorySession
 
 from onedrive import CHUNK_SIZE, OneDrive, folder_parts, required, sharepoint_configured
-from oauth import telegram_login
+from oauth import cached_login
 
 
 def safe_name(name, message_id):
@@ -92,7 +92,7 @@ async def main():
 
     try:
         await client.start(bot_token=required('TG_BOT_TOKEN'))
-        access_token = await telegram_login(client, owner) if auth_mode == 'oauth' else None
+        access_token = await cached_login(client, owner) if auth_mode == 'oauth' else None
         await client.send_message(owner,
             f'转存已启动。请在 {wait} 秒内发送或转发文件到此私聊，再回复该文件 /select。',
             parse_mode=None)

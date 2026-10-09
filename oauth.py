@@ -11,6 +11,7 @@ import requests
 from telethon import events
 
 from onedrive import required
+from token_cache import GistTokenCache
 
 
 def token_error(response):
@@ -98,7 +99,7 @@ class OAuthFlow:
         return tokens
 
 
-async def telegram_login(client, owner):
+async def telegram_login(client, owner, return_tokens=False):
     flow = OAuthFlow()
     wait = int(os.environ.get('OAUTH_WAIT_SECONDS', '600'))
     if not 30 <= wait <= 1800:
@@ -139,6 +140,48 @@ async def telegram_login(client, owner):
             await client.send_message(owner, str(exc), parse_mode=None)
             raise
         await client.send_message(owner, '微软授权成功，本次运行将使用该账号转存文件。')
-        return tokens['access_token']
+        return tokens if return_tokens else tokens['access_token']
     finally:
         client.remove_event_handler(receive, builder)
+
+
+def refresh_login(refresh_token):
+    tenant = os.environ.get('TENANTID', '').strip() or 'common'
+    data = {'client_id': required('CLIENTID'), 'grant_type': 'refresh_token',
+            'refresh_token': refresh_token}
+    secret = os.environ.get('CLIENTSECRET', '').strip()
+    if secret:
+        data['client_secret'] = secret
+    try:
+        response = requests.post(
+            f'https://login.microsoftonline.com/{quote(tenant, safe="")}/oauth2/v2.0/token',
+            data=data, timeout=(30, 60))
+    except requests.RequestException:
+        raise RuntimeError('刷新 token 网络请求失败') from None
+    if response.status_code != 200:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        # Reauthenticate only for an expired/revoked grant or required interaction.
+        if isinstance(payload, dict) and payload.get('error') in ('invalid_grant', 'interaction_required'):
+            return None
+        raise RuntimeError(token_error(response))
+    tokens = response.json()
+    if not tokens.get('access_token'):
+        raise RuntimeError('刷新响应缺少 access_token')
+    tokens.setdefault('refresh_token', refresh_token)
+    return tokens
+
+
+async def cached_login(client, owner):
+    if not os.environ.get('GIST_ID', '').strip():
+        return await telegram_login(client, owner)
+    cache = GistTokenCache()
+    refresh = await asyncio.to_thread(cache.load)
+    tokens = await asyncio.to_thread(refresh_login, refresh) if refresh else None
+    if tokens is None:
+        await client.send_message(owner, '没有可用的刷新 token，请完成一次微软登录。')
+        tokens = await telegram_login(client, owner, return_tokens=True)
+    await asyncio.to_thread(cache.save, tokens.get('refresh_token'))
+    return tokens['access_token']

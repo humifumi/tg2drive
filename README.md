@@ -23,7 +23,21 @@
 4. 启动程序或 Action，打开机器人发来的授权链接并登录。浏览器跳到 `http://localhost/?code=...&state=...` 后，即使显示无法访问，也复制**完整地址栏 URI**发回机器人；也可发送 `/oauth 完整URI`。
 5. 程序校验本次登录 state、回调地址和 PKCE，换取 access token 后继续等待 `/select`。登录等待默认 600 秒。
 
-微软回调 URI 包含一次性授权码，程序在服务端换取 token；不会把 access token 放进回调 URI。token 仅保存在本次运行内存中，不回写文件、不发回 Telegram，也不自动保存至 GitHub Secrets；下次运行重新登录。
+微软回调 URI 包含一次性授权码，程序在服务端换取 token；不会把 access token 放进回调 URI。access token 只保存在本次运行内存中。配置 Gist 缓存后，refresh token 加密保存于 Gist，下次运行自动刷新；不存在、过期或撤销时才通过 TG 重新验证。
+
+### Gist 登录缓存
+
+`AUTH_MODE=oauth` 下配置以下项即可使用缓存：
+
+| 配置 | 存放位置 | 内容 |
+| --- | --- | --- |
+| `GIST_ID` | Actions Variable | 缓存 Gist ID |
+| `GIST_TOKEN` | Actions Secret | 有 Gist 读写权限的 GitHub token（classic PAT 需 gist scope） |
+| `GIST_ENCRYPTION_KEY` | Actions Secret | Fernet 加密密钥，本地同名配置 |
+
+Gist 文件 `tg2drive-token.json` 只存密文，不保存 access token。密钥须长期保留，所有使用同一缓存的运行需串行执行。缓存绑定 CLIENTID 和 TENANTID；变更后重新登录。网络错误、权限错误或密钥不匹配会报错，不自动替换缓存。未配置 GIST_ID 时，每次运行都验证。
+
+首次缓存为空，机器人发送登录链接；成功后自动保存刷新 token。之后每次刷新均更新缓存，刷新 token 失效时重新发链接。Gist 请求使用 [GitHub 官方 API](https://docs.github.com/en/rest/gists/gists)。
 
 `AUTH_MODE=auto`（Action 中选择 `auto`）保留原有 refresh token / 应用凭据模式。OAuth 配置错误或超时会结束本次任务，不会自动换成其他账号授权。
 
