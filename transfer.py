@@ -26,50 +26,71 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
     size = message.file.size
     if size is None or size < 0:
         raise ValueError('无法获取 Telegram 文件大小')
+    workers = int(os.environ.get('DOWNLOAD_WORKERS', '4'))
+    if not 1 <= workers <= 8:
+        raise ValueError('DOWNLOAD_WORKERS 必须在 1–8 之间')
     if size == 0:
         logger.info('文件为空，直接创建目标文件')
         return await asyncio.to_thread(drive.upload_empty, name, folder)
     logger.info('准备上传会话 | 文件大小 %s | 分片大小 10 MiB', format_bytes(size))
     session = await asyncio.to_thread(drive.start_upload, name, size, folder)
     progress = TransferProgress(size, CHUNK_SIZE)
-    # Two block slots cover the producer buffer, queue, and active upload.
-    queue = asyncio.Queue(maxsize=1)
-    slots = asyncio.Semaphore(2)
-    iterator = client.iter_download(message.media, request_size=512 * 1024,
-                                    chunk_size=512 * 1024, file_size=size)
-    logger.info('生产者消费者已启动 | 最多缓存两片 | OneDrive 单消费者顺序上传')
+    count = (size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    workers = min(workers, count)
+    slots = asyncio.Semaphore(workers + 1)
+    ready = asyncio.Condition()
+    blocks = {}
+    next_index = 0
+    downloaded = 0
+    active = 0
+    finished = 0
+    logger.info('多路下载已启动 | %s 路 | 最多 %s 片在途 | OneDrive 顺序上传', workers, workers + 1)
 
     async def produce():
-        downloaded = 0
-        while downloaded < size:
-            progress.download_state = '等待缓冲空间'
+        nonlocal next_index, downloaded, active, finished
+        while next_index < count:
             await slots.acquire()
-            progress.download_state = '下载中'
+            if next_index >= count:
+                slots.release()
+                return
+            index = next_index
+            next_index += 1
+            target = min(CHUNK_SIZE, size - index * CHUNK_SIZE)
+            iterator = client.iter_download(message.media, offset=index * CHUNK_SIZE,
+                limit=(target + 524287) // 524288, request_size=524288,
+                chunk_size=524288, file_size=size)
             buffer = bytearray()
-            target = min(CHUNK_SIZE, size - downloaded)
-            while len(buffer) < target:
-                try:
-                    piece = await iterator.__anext__()
-                except StopAsyncIteration:
-                    raise RuntimeError('Telegram 下载不完整') from None
-                if not piece or len(buffer) + len(piece) > target:
-                    raise RuntimeError('Telegram 返回无效文件分片')
-                buffer.extend(piece)
-                downloaded += len(piece)
-                progress.download(downloaded)
-            await queue.put(buffer)
-            # Transfer ownership; never modify an enqueued block.
-            del buffer
-        progress.download_state = '下载完成'
-        await queue.put(None)
+            active += 1
+            progress.download_state = f'{active} 路下载中'
+            try:
+                while len(buffer) < target:
+                    try:
+                        piece = await iterator.__anext__()
+                    except StopAsyncIteration:
+                        raise RuntimeError('Telegram 下载不完整') from None
+                    if not piece or len(buffer) + len(piece) > target:
+                        raise RuntimeError('Telegram 返回无效文件分片')
+                    buffer.extend(piece)
+                    downloaded += len(piece)
+                    progress.download(downloaded)
+            finally:
+                active -= 1
+                await iterator.close()
+            async with ready:
+                blocks[index] = buffer
+                del buffer
+                finished += 1
+                progress.download_state = ('下载完成' if finished == count else
+                    f'{active} 路下载中' if active else '等待缓冲空间')
+                ready.notify_all()
 
     async def consume():
         uploaded = 0
-        while True:
+        for index in range(count):
             progress.upload_state = '等待下载分片'
-            block = await queue.get()
-            if block is None:
-                break
+            async with ready:
+                await ready.wait_for(lambda: index in blocks)
+                block = blocks.pop(index)
             try:
                 progress.upload_state = '上传中（失败时自动重试）'
                 progress.upload_start()
@@ -98,7 +119,8 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
                 logger.warning('Telegram 进度消息更新失败，转存继续')
             await asyncio.sleep(PROGRESS_INTERVAL)
 
-    tasks = [asyncio.create_task(produce()), asyncio.create_task(consume())]
+    tasks = [asyncio.create_task(produce()) for _ in range(workers)]
+    tasks.append(asyncio.create_task(consume()))
     reporter = asyncio.create_task(report()) if on_progress else None
     try:
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
@@ -114,12 +136,11 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        try:
-            await iterator.close()
-        finally:
-            if session.item is None:
-                logger.warning('转存未完成，正在取消上传会话')
-                await asyncio.to_thread(session.cancel)
+        blocks.clear()
+        if session.item is None:
+            logger.warning('转存未完成，正在取消上传会话')
+            await asyncio.to_thread(session.cancel)
+
 
 
 async def main():

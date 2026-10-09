@@ -92,6 +92,11 @@ class TransferTests(unittest.TestCase):
 
 
 class StreamingTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        env = patch.dict('os.environ', {'DOWNLOAD_WORKERS': '1'})
+        env.start()
+        self.addCleanup(env.stop)
+
     async def transfer_fixture(self, size, pieces, fail_upload=False):
         trace = []
         drive = OneDrive.__new__(OneDrive)
@@ -115,8 +120,8 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         drive.request = Mock(side_effect=request)
 
         class Iterator:
-            def __init__(self):
-                self.pieces = iter(pieces)
+            def __init__(self, start=0, limit=None):
+                self.pieces = iter(pieces[start:] if limit is None else pieces[start:start + limit])
 
             def __aiter__(self):
                 return self
@@ -134,6 +139,8 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
 
         client = Mock()
         client.iter_download.return_value = Iterator()
+        client.iter_download.side_effect = lambda media, **kwargs: Iterator(
+            kwargs.get('offset', 0) // (512 * 1024), kwargs.get('limit'))
         message = Mock()
         message.file.size = size
         return client, message, drive, trace, uploads
@@ -144,7 +151,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         item = await stream_transfer(client, message, drive, 'file.bin', 'Public')
         self.assertEqual(item['name'], 'file.bin')
         self.assertEqual(trace.count('upload'), 2)
-        self.assertEqual(trace[-1], 'close')
+        self.assertEqual(trace.count('close'), 2)
         self.assertEqual(list(map(len, uploads)), [CHUNK_SIZE, 4])
         self.assertEqual(b''.join(uploads), b''.join(pieces))
 
@@ -152,7 +159,9 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         client, message, drive, trace, uploads = await self.transfer_fixture(
             CHUNK_SIZE, [b'a' * (512 * 1024)] * 20)
         await stream_transfer(client, message, drive, 'file.bin', 'Public')
-        self.assertEqual(trace, ['download'] * 20 + ['upload', 'close'])
+        self.assertEqual(trace.count('download'), 20)
+        self.assertEqual(trace.count('upload'), 1)
+        self.assertEqual(trace.count('close'), 1)
 
     async def test_download_overlaps_upload_but_only_two_blocks_are_buffered(self):
         pieces = ([b'a' * (512 * 1024)] * 20 + [b'b' * (512 * 1024)] * 20
@@ -188,7 +197,8 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, '下载不完整'):
             await stream_transfer(client, message, drive, 'file.bin', 'Public')
         self.assertEqual(uploads, [])
-        self.assertEqual(trace[-2:], ['close', 'cancel'])
+        self.assertIn('close', trace)
+        self.assertEqual(trace[-1], 'cancel')
 
     async def test_failed_upload_stops_further_downloads(self):
         client, message, drive, trace, uploads = await self.transfer_fixture(
@@ -196,7 +206,47 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, '上传分片失败'):
             await stream_transfer(client, message, drive, 'file.bin', 'Public')
         self.assertEqual(trace.count('upload'), 1)
-        self.assertEqual(trace[-2:], ['close', 'cancel'])
+        self.assertIn('close', trace)
+        self.assertEqual(trace[-1], 'cancel')
+
+    async def test_parallel_downloads_reorder_and_bound_window(self):
+        block_size = 1024
+        data = [bytes([index]) * block_size for index in range(6)]
+        client, message, drive, trace, uploads = await self.transfer_fixture(block_size * 6, data)
+        started = [asyncio.Event() for _ in data]
+        release = [asyncio.Event() for _ in data]
+        finished = [asyncio.Event() for _ in data]
+
+        class ControlledIterator:
+            def __init__(self, index):
+                self.index = index
+
+            async def __anext__(self):
+                started[self.index].set()
+                await release[self.index].wait()
+                finished[self.index].set()
+                return data[self.index]
+
+            async def close(self):
+                pass
+
+        client.iter_download.side_effect = lambda media, **kwargs: ControlledIterator(kwargs['offset'] // block_size)
+        with patch.dict('os.environ', {'DOWNLOAD_WORKERS': '4'}), patch('transfer.CHUNK_SIZE', block_size), patch('onedrive.CHUNK_SIZE', block_size):
+            task = asyncio.create_task(stream_transfer(client, message, drive, 'file.bin', 'Public'))
+            try:
+                await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started[:4])), 2)
+                for index in (3, 2, 1):
+                    release[index].set()
+                await asyncio.wait_for(started[4].wait(), 2)
+                release[4].set()
+                await asyncio.wait_for(finished[4].wait(), 2)
+                self.assertFalse(started[5].is_set())
+                self.assertEqual(uploads, [])
+            finally:
+                for event in release:
+                    event.set()
+                await asyncio.wait_for(task, 2)
+        self.assertEqual(uploads, data)
 
     async def test_empty_file_uses_direct_upload(self):
         client = Mock()
@@ -223,6 +273,7 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
                 await original.close()
 
         client.iter_download.return_value = SlowIterator()
+        client.iter_download.side_effect = None
 
         async def update(text):
             texts.append(text)

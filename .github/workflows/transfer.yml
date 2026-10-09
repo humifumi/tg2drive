@@ -50,4 +50,5 @@ jobs:
           SHAREPOINT_DRIVE_ID: ${{ secrets.SHAREPOINT_DRIVE_ID }}
           TARGET_FOLDER: ${{ inputs.folder || vars.TARGET_FOLDER || 'Public/Telegram' }}
           WAIT_SECONDS: ${{ inputs.wait_seconds || vars.WAIT_SECONDS || '300' }}
+          DOWNLOAD_WORKERS: ${{ vars.DOWNLOAD_WORKERS || '4' }}
         run: python transfer.py
