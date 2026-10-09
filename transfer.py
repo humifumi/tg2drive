@@ -2,6 +2,7 @@
 import asyncio
 import os
 import re
+import tempfile
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -12,6 +13,7 @@ from telethon.sessions import MemorySession
 from onedrive import CHUNK_SIZE, OneDrive, folder_parts, required
 from oauth import cached_login
 from progress import TransferProgress, configure_logs, format_bytes, logger
+from buffering import buffer_plan
 
 PROGRESS_INTERVAL = 10
 
@@ -32,19 +34,34 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
     if size == 0:
         logger.info('文件为空，直接创建目标文件')
         return await asyncio.to_thread(drive.upload_empty, name, folder)
+    count = (size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    plan = buffer_plan(workers, count, CHUNK_SIZE)
+    logger.info('自动缓冲 | 可用内存 %s | 可用磁盘 %s | %s 路下载 | 最多 %s 片（%s）',
+                format_bytes(plan.memory_available), format_bytes(plan.disk_available),
+                plan.workers, plan.slots, format_bytes(plan.slots * CHUNK_SIZE))
     logger.info('准备上传会话 | 文件大小 %s | 分片大小 10 MiB', format_bytes(size))
     session = await asyncio.to_thread(drive.start_upload, name, size, folder)
     progress = TransferProgress(size, CHUNK_SIZE)
-    count = (size + CHUNK_SIZE - 1) // CHUNK_SIZE
-    workers = min(workers, count)
-    slots = asyncio.Semaphore(workers + 1)
+    workers = plan.workers
+    slots = asyncio.Semaphore(plan.slots)
+    cache = tempfile.TemporaryDirectory(prefix='tg2drive-buffer-')
     ready = asyncio.Condition()
     blocks = {}
     next_index = 0
     downloaded = 0
     active = 0
     finished = 0
-    logger.info('多路下载已启动 | %s 路 | 最多 %s 片在途 | OneDrive 顺序上传', workers, workers + 1)
+    logger.info('多路下载已启动 | %s 路 | 最多 %s 片在途 | 临时磁盘缓存 | OneDrive 顺序上传', workers, plan.slots)
+
+    async def disk_io(function, *args):
+        task = asyncio.create_task(asyncio.to_thread(function, *args))
+        try:
+            return await asyncio.shield(task)
+        except OSError:
+            raise RuntimeError('临时缓存读写失败，请检查磁盘剩余空间和目录权限') from None
+        except asyncio.CancelledError:
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
     async def produce():
         nonlocal next_index, downloaded, active, finished
@@ -76,9 +93,11 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
             finally:
                 active -= 1
                 await iterator.close()
+            path = Path(cache.name) / f'{index}.part'
+            await disk_io(path.write_bytes, buffer)
+            del buffer
             async with ready:
-                blocks[index] = buffer
-                del buffer
+                blocks[index] = path
                 finished += 1
                 progress.download_state = ('下载完成' if finished == count else
                     f'{active} 路下载中' if active else '等待缓冲空间')
@@ -90,8 +109,10 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
             progress.upload_state = '等待下载分片'
             async with ready:
                 await ready.wait_for(lambda: index in blocks)
-                block = blocks.pop(index)
+                path = blocks.pop(index)
+            block = None
             try:
+                block = await disk_io(path.read_bytes)
                 progress.upload_state = '上传中（失败时自动重试）'
                 progress.upload_start()
                 upload = asyncio.create_task(asyncio.to_thread(session.upload_chunk, block))
@@ -106,6 +127,7 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
                 progress.upload_done(uploaded)
             finally:
                 del block
+                await disk_io(lambda: path.unlink(missing_ok=True))
                 slots.release()
         if uploaded != size or session.item is None:
             raise RuntimeError('OneDrive 未确认上传完成')
@@ -114,7 +136,8 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
     async def report():
         while True:
             try:
-                await on_progress(progress.telegram_text())
+                await on_progress(progress.telegram_text() +
+                    f'\n实际下载并发：{workers} 路 · 缓冲上限：{format_bytes(plan.slots * CHUNK_SIZE)}')
             except Exception:
                 logger.warning('Telegram 进度消息更新失败，转存继续')
             await asyncio.sleep(PROGRESS_INTERVAL)
@@ -137,6 +160,7 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         blocks.clear()
+        cache.cleanup()
         if session.item is None:
             logger.warning('转存未完成，正在取消上传会话')
             await asyncio.to_thread(session.cancel)

@@ -1,12 +1,14 @@
 import tempfile
 import asyncio
 import threading
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from onedrive import CHUNK_SIZE, GRAPH, OneDrive, folder_parts, site_lookup_url
 from transfer import safe_name, stream_transfer
+from buffering import BufferPlan
 
 
 def response(status, payload):
@@ -96,6 +98,10 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         env = patch.dict('os.environ', {'DOWNLOAD_WORKERS': '1'})
         env.start()
         self.addCleanup(env.stop)
+        plan = patch('transfer.buffer_plan', side_effect=lambda requested, count, chunk: BufferPlan(
+            min(requested, count), min(requested + 1, count), 1024**3, 10 * 1024**3))
+        plan.start()
+        self.addCleanup(plan.stop)
 
     async def transfer_fixture(self, size, pieces, fail_upload=False):
         trace = []
