@@ -3,6 +3,7 @@ import asyncio
 import base64
 import hashlib
 import os
+import re
 import secrets
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
@@ -10,6 +11,33 @@ import requests
 from telethon import events
 
 from onedrive import required
+
+
+def token_error(response):
+    try:
+        payload = response.json()
+    except (ValueError, requests.RequestException):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    codes = payload.get('error_codes', [])
+    codes = codes if isinstance(codes, list) else []
+    numbers = [str(code) for code in codes if re.fullmatch(r'\d{4,10}', str(code))]
+    if not numbers:
+        numbers = re.findall(r'AADSTS(\d{4,10})\b', str(payload.get('error_description', '')))
+    hints = {
+        '7000218': '应用要求客户端密钥。请填写 CLIENTSECRET；若使用无密钥登录，请将此回调注册为“移动和桌面应用”，而非 Web。',
+        '7000215': '客户端密钥无效。CLIENTSECRET 应填写密钥 Value，而非 Secret ID。',
+        '7000222': '客户端密钥已过期，请生成新密钥并更新 GitHub Secret CLIENTSECRET。',
+        '50011': '回调 URI 与微软应用注册不一致，请检查 OAUTH_REDIRECT_URI。',
+        '70000': '授权码无效或已过期，请重新运行，使用新链接登录并及时发送完整回调 URI。',
+        '700016': '找不到应用，请检查 CLIENTID 和 TENANTID。',
+        '65001': '尚未同意委托权限，请完成用户或管理员授权。',
+    }
+    detail = '、'.join('AADSTS' + number for number in numbers[:5])
+    hint = next((hints[number] for number in numbers if number in hints),
+                '请检查应用的客户端类型、密钥、回调 URI 和委托权限。')
+    return f'OAuth 换取 token 失败（HTTP {response.status_code}' + (f'，{detail}' if detail else '') + f'）。{hint}'
 
 
 class OAuthFlow:
@@ -63,7 +91,7 @@ class OAuthFlow:
         except requests.RequestException:
             raise RuntimeError('OAuth 换取 token 网络失败，请重新运行并登录') from None
         if response.status_code != 200:
-            raise RuntimeError(f'OAuth 换取 token 失败（HTTP {response.status_code}），请检查回调配置和委托权限')
+            raise RuntimeError(token_error(response))
         tokens = response.json()
         if not tokens.get('access_token'):
             raise RuntimeError('OAuth 响应缺少 access_token')
@@ -105,7 +133,11 @@ async def telegram_login(client, owner):
             code = await asyncio.wait_for(callback, wait)
         except asyncio.TimeoutError:
             raise RuntimeError('OAuth 登录等待超时') from None
-        tokens = await asyncio.to_thread(flow.exchange, code)
+        try:
+            tokens = await asyncio.to_thread(flow.exchange, code)
+        except RuntimeError as exc:
+            await client.send_message(owner, str(exc), parse_mode=None)
+            raise
         await client.send_message(owner, '微软授权成功，本次运行将使用该账号转存文件。')
         return tokens['access_token']
     finally:

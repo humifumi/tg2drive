@@ -4,7 +4,7 @@ import unittest
 from urllib.parse import parse_qs, urlencode, urlsplit
 from unittest.mock import AsyncMock, Mock, patch
 
-from oauth import OAuthFlow, telegram_login
+from oauth import OAuthFlow, telegram_login, token_error
 from onedrive import OneDrive
 
 
@@ -45,9 +45,27 @@ class OAuthTests(unittest.TestCase):
 
     def test_exchange_error_does_not_expose_response_credentials(self):
         response = Mock(status_code=400, text='secret code refresh_token')
+        response.json.return_value = {'error_description': 'secret code refresh_token'}
         with patch('oauth.requests.post', return_value=response), self.assertRaises(RuntimeError) as error:
             self.flow.exchange('code')
         self.assertNotIn('secret', str(error.exception))
+
+    def test_missing_client_secret_is_diagnosed_without_echoing_payload(self):
+        response = Mock(status_code=401)
+        response.json.return_value = {'error_codes': [7000218],
+                                     'error_description': 'sensitive-code-sensitive-token'}
+        message = token_error(response)
+        self.assertIn('AADSTS7000218', message)
+        self.assertIn('CLIENTSECRET', message)
+        self.assertNotIn('sensitive', message)
+
+    def test_error_code_fallback_and_non_json_response(self):
+        response = Mock(status_code=401)
+        response.json.return_value = {'error_description': 'AADSTS7000215: sensitive-value'}
+        self.assertIn('AADSTS7000215', token_error(response))
+        self.assertNotIn('sensitive-value', token_error(response))
+        response.json.side_effect = ValueError('sensitive')
+        self.assertIn('HTTP 401', token_error(response))
 
     def test_existing_access_token_skips_token_exchange(self):
         with patch.object(OneDrive, 'request') as request:
