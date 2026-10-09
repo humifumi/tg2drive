@@ -4,6 +4,7 @@ import time
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
+from progress import logger
 
 GRAPH = 'https://graph.microsoft.com/v1.0'
 CHUNK_SIZE = 327680 * 32
@@ -101,6 +102,7 @@ class OneDrive:
             except requests.RequestException:
                 if attempt == 4:
                     raise RuntimeError('OneDrive 网络请求失败') from None
+                logger.warning('存储请求网络异常 | 重试 %s/4 | %s 秒后重试', attempt + 1, 2 ** attempt)
                 time.sleep(2 ** attempt)
                 continue
             if response.status_code not in (429, 500, 502, 503, 504) or attempt == 4:
@@ -109,7 +111,10 @@ class OneDrive:
                 delay = float(response.headers.get('Retry-After', 2 ** attempt))
             except ValueError:
                 delay = 2 ** attempt
-            time.sleep(min(max(delay, 0), 120))
+            delay = min(max(delay, 0), 120)
+            logger.warning('存储服务暂不可用 | HTTP %s | 重试 %s/4 | %.0f 秒后重试',
+                           response.status_code, attempt + 1, delay)
+            time.sleep(delay)
 
     def graph(self, method, suffix, expected=(200,), **kwargs):
         response = self.request(method, self.drive + suffix,
@@ -195,7 +200,6 @@ class UploadSession:
             if next_offset != end or end >= self.size:
                 raise RuntimeError('OneDrive 未确认当前分片或上传完成')
         self.offset = end
-        print(f'OneDrive 已转存 {end}/{self.size} bytes ({end / self.size:.1%})', flush=True)
         return self.item
 
     def cancel(self):

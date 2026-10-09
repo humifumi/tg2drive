@@ -12,6 +12,7 @@ from telethon import events
 
 from onedrive import required
 from token_cache import GistTokenCache
+from progress import logger
 
 
 def token_error(response):
@@ -100,6 +101,7 @@ class OAuthFlow:
 
 
 async def telegram_login(client, owner, return_tokens=False):
+    logger.info('需要微软登录 | 授权链接将发送至 Telegram 私聊')
     flow = OAuthFlow()
     wait = int(os.environ.get('OAUTH_WAIT_SECONDS', '600'))
     if not 30 <= wait <= 1800:
@@ -135,11 +137,13 @@ async def telegram_login(client, owner, return_tokens=False):
         except asyncio.TimeoutError:
             raise RuntimeError('OAuth 登录等待超时') from None
         try:
+            logger.info('已收到有效 OAuth 回调 | 正在换取 token')
             tokens = await asyncio.to_thread(flow.exchange, code)
         except RuntimeError as exc:
             await client.send_message(owner, str(exc), parse_mode=None)
             raise
         await client.send_message(owner, '微软授权成功，本次运行将使用该账号转存文件。')
+        logger.info('微软授权成功')
         return tokens if return_tokens else tokens['access_token']
     finally:
         client.remove_event_handler(receive, builder)
@@ -178,10 +182,15 @@ async def cached_login(client, owner):
     if not os.environ.get('GIST_ID', '').strip():
         return await telegram_login(client, owner)
     cache = GistTokenCache()
+    logger.info('正在读取 Gist 登录缓存')
     refresh = await asyncio.to_thread(cache.load)
+    if refresh:
+        logger.info('找到刷新 token | 正在自动登录')
     tokens = await asyncio.to_thread(refresh_login, refresh) if refresh else None
     if tokens is None:
+        logger.info('登录缓存为空或已失效 | 开始交互验证')
         await client.send_message(owner, '没有可用的刷新 token，请完成一次微软登录。')
         tokens = await telegram_login(client, owner, return_tokens=True)
     await asyncio.to_thread(cache.save, tokens.get('refresh_token'))
+    logger.info('登录状态已更新至 Gist')
     return tokens['access_token']
