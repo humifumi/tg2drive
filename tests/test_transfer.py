@@ -1,4 +1,6 @@
 import tempfile
+import asyncio
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -150,12 +152,13 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
         message.file.size = size
         return client, message, drive, trace, uploads
 
-    async def test_next_block_download_waits_for_previous_upload(self):
+    async def test_pipeline_preserves_file_content_and_upload_order(self):
         pieces = [b'a' * (512 * 1024)] * 20 + [b'tail']
         client, message, drive, trace, uploads = await self.transfer_fixture(CHUNK_SIZE + 4, pieces)
         item = await stream_transfer(client, message, drive, 'file.bin', 'Public')
         self.assertEqual(item['name'], 'file.bin')
-        self.assertEqual(trace, ['download'] * 20 + ['upload', 'download', 'upload', 'close'])
+        self.assertEqual(trace.count('upload'), 2)
+        self.assertEqual(trace[-1], 'close')
         self.assertEqual(list(map(len, uploads)), [CHUNK_SIZE, 4])
         self.assertEqual(b''.join(uploads), b''.join(pieces))
 
@@ -164,6 +167,35 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             CHUNK_SIZE, [b'a' * (512 * 1024)] * 20)
         await stream_transfer(client, message, drive, 'file.bin', 'Public')
         self.assertEqual(trace, ['download'] * 20 + ['upload', 'close'])
+
+    async def test_download_overlaps_upload_but_only_two_blocks_are_buffered(self):
+        pieces = ([b'a' * (512 * 1024)] * 20 + [b'b' * (512 * 1024)] * 20
+                  + [b'c' * (512 * 1024)] * 20)
+        client, message, drive, trace, uploads = await self.transfer_fixture(CHUNK_SIZE * 3, pieces)
+        started = asyncio.Event()
+        release = threading.Event()
+        loop = asyncio.get_running_loop()
+        original = drive.request.side_effect
+
+        def slow_first_upload(method, url, **kwargs):
+            if method == 'PUT' and not uploads:
+                loop.call_soon_threadsafe(started.set)
+                if not release.wait(5):
+                    raise RuntimeError('test upload timed out')
+            return original(method, url, **kwargs)
+
+        drive.request.side_effect = slow_first_upload
+        transfer = asyncio.create_task(stream_transfer(client, message, drive, 'file.bin', 'Public'))
+        try:
+            await asyncio.wait_for(started.wait(), 2)
+            await asyncio.sleep(0)
+            self.assertEqual(trace.count('download'), 40)
+            self.assertEqual(uploads, [])
+        finally:
+            release.set()
+            await asyncio.wait_for(transfer, 5)
+        self.assertEqual(b''.join(uploads), b''.join(pieces))
+        self.assertEqual(len(uploads), 3)
 
     async def test_truncated_download_cancels_session(self):
         client, message, drive, trace, uploads = await self.transfer_fixture(100, [b'short'])
@@ -177,7 +209,8 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
             CHUNK_SIZE + 4, [b'a' * (512 * 1024)] * 20 + [b'tail'], fail_upload=True)
         with self.assertRaisesRegex(RuntimeError, '上传分片失败'):
             await stream_transfer(client, message, drive, 'file.bin', 'Public')
-        self.assertEqual(trace, ['download'] * 20 + ['upload', 'close', 'cancel'])
+        self.assertEqual(trace.count('upload'), 1)
+        self.assertEqual(trace[-2:], ['close', 'cancel'])
 
     async def test_empty_file_uses_direct_upload(self):
         client = Mock()

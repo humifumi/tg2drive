@@ -1,6 +1,6 @@
 # tg2drive
 
-通过 GitHub Actions 将 Telegram 附件分片转存至 OneDrive。每下载 10 MiB，就顺序上传该片，确认成功后才下载下一片；最后不足 10 MiB 的部分直接上传。文件缓冲在内存中，不需要完整落盘；完成后从 OneDrive 下载到自己的硬盘，或通过 OneDrive 客户端同步。
+通过 GitHub Actions 将 Telegram 附件分片转存至 OneDrive。Telegram 生产者每下载 10 MiB 就放入有界队列，OneDrive 单消费者严格顺序上传；上传当前片时可同时下载下一片。最多保留两片，文件缓冲约 20 MiB，不需要完整落盘。末片可以不足 10 MiB；完成后从 OneDrive 下载到自己的硬盘，或通过 OneDrive 客户端同步。
 
 ## 使用
 
@@ -100,10 +100,10 @@ Gist 文件 `tg2drive-token.json` 只存密文，不保存 access token。密钥
 
 ## 行为与限制
 
-- Telegram 底层每次请求 512 KiB，累计到 10 MiB 后暂停下载，上传当前片；不并行下载和上传。OneDrive 限流及临时网络故障最多尝试 5 次。
+- Telegram 底层每次请求 512 KiB，累计成 10 MiB 分片。下载与上传并行，最多两片在途；缓冲区满时下载等待。OneDrive 单消费者顺序上传，限流及临时网络故障最多尝试 5 次。
 - 自动创建目标目录；普通非空文件同名时自动重命名，不清空已有目录。零字节文件使用直接上传，同名时会覆盖。
 - 等待选择文件默认 300 秒，可设为 30–1800 秒；工作流最多运行 180 分钟。
-- 每次仅缓存一片文件，不保存完整附件或 session 文件，不上传附件为 GitHub Artifact。失败时尝试取消未完成的 OneDrive 上传会话；重跑从头开始。
+- 最多缓存两片文件，不保存完整附件或 session 文件，不上传附件为 GitHub Artifact。任一端失败会停止另一端，等待正在执行的上传请求结束，再尝试取消未完成的 OneDrive 上传会话；重跑从头开始。
 - 速度取决于 GitHub Runner 到 Telegram/OneDrive 的线路，不能保证每次都比客户端快。大文件还受账号限速、上传会话有效期和 OneDrive 配额影响。
 - Actions 使用量按你的 GitHub 账号额度计费；本地不需要持续开机。
 

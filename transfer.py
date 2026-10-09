@@ -31,34 +31,72 @@ async def stream_transfer(client, message, drive, name, folder, on_progress=None
     logger.info('准备上传会话 | 文件大小 %s | 分片大小 10 MiB', format_bytes(size))
     session = await asyncio.to_thread(drive.start_upload, name, size, folder)
     progress = TransferProgress(size, CHUNK_SIZE)
-    # Telegram requests 512 KiB at a time; only collect one 10 MiB block.
+    # Two block slots cover the producer buffer, queue, and active upload.
+    queue = asyncio.Queue(maxsize=1)
+    slots = asyncio.Semaphore(2)
     iterator = client.iter_download(message.media, request_size=512 * 1024,
                                     chunk_size=512 * 1024, file_size=size)
-    buffer = bytearray()
-    downloaded = 0
-    try:
-        async for piece in iterator:
-            if not piece or downloaded + len(piece) > size:
-                raise RuntimeError('Telegram 返回无效文件分片')
-            downloaded += len(piece)
-            progress.download(downloaded)
-            buffer.extend(piece)
-            if len(buffer) > CHUNK_SIZE:
-                raise RuntimeError('Telegram 分片超过缓冲区大小')
-            if len(buffer) == CHUNK_SIZE or downloaded == size:
+    logger.info('生产者消费者已启动 | 最多缓存两片 | OneDrive 单消费者顺序上传')
+
+    async def produce():
+        downloaded = 0
+        while downloaded < size:
+            await slots.acquire()
+            buffer = bytearray()
+            target = min(CHUNK_SIZE, size - downloaded)
+            while len(buffer) < target:
+                try:
+                    piece = await iterator.__anext__()
+                except StopAsyncIteration:
+                    raise RuntimeError('Telegram 下载不完整') from None
+                if not piece or len(buffer) + len(piece) > target:
+                    raise RuntimeError('Telegram 返回无效文件分片')
+                buffer.extend(piece)
+                downloaded += len(piece)
+                progress.download(downloaded)
+            await queue.put(buffer)
+            # Transfer ownership; never modify an enqueued block.
+            del buffer
+        await queue.put(None)
+
+    async def consume():
+        uploaded = 0
+        while True:
+            block = await queue.get()
+            if block is None:
+                break
+            try:
                 progress.upload_start()
-                # Await confirmation before requesting the next Telegram block.
-                await asyncio.to_thread(session.upload_chunk, buffer)
-                text = progress.upload_done(downloaded)
-                if on_progress:
-                    await on_progress(text)
-                buffer.clear()
-                if downloaded == size:
-                    break
-        if downloaded != size or session.item is None:
-            raise RuntimeError('Telegram 下载不完整或 OneDrive 未确认完成')
+                upload = asyncio.create_task(asyncio.to_thread(session.upload_chunk, block))
+                try:
+                    await asyncio.shield(upload)
+                except asyncio.CancelledError:
+                    # Thread requests cannot be cancelled. Drain before cancelling
+                    # the upload session, avoiding a race with an in-flight PUT.
+                    await asyncio.gather(upload, return_exceptions=True)
+                    raise
+                uploaded += len(block)
+                text = progress.upload_done(uploaded)
+            finally:
+                del block
+                slots.release()
+            if on_progress:
+                await on_progress(text)
+        if uploaded != size or session.item is None:
+            raise RuntimeError('OneDrive 未确认上传完成')
+
+    tasks = [asyncio.create_task(produce()), asyncio.create_task(consume())]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+        for task in tasks:
+            if task in done:
+                task.result()
         return session.item
     finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         try:
             await iterator.close()
         finally:
