@@ -16,6 +16,7 @@ from google_oauth import cached_login as google_login
 from googledrive import GoogleDrive
 from progress import TransferProgress, configure_logs, format_bytes, logger
 from buffering import buffer_plan
+from bot_commands import register_commands
 
 PROGRESS_INTERVAL = 10
 
@@ -187,6 +188,15 @@ async def main():
     selected = asyncio.get_running_loop().create_future()
 
     @client.on(events.NewMessage(incoming=True, from_users=owner,
+                                pattern=r'^/start(?:@\w+)?\s*$'))
+    async def help_command(event):
+        if event.is_private:
+            await event.reply('在 GitHub Actions 启动转存任务。\n'
+                '需要授权时打开登录链接，再发送 /oauth 完整回调URI。\n'
+                '发送或转发附件，回复附件 /select 开始转存。\n'
+                '机器人只在工作流运行期间处理命令。', parse_mode=None)
+
+    @client.on(events.NewMessage(incoming=True, from_users=owner,
                                 pattern=r'^/select(?:@\w+)?\s*$'))
     async def select(event):
         if not event.is_private or selected.done():
@@ -201,6 +211,11 @@ async def main():
     try:
         logger.info('正在连接 Telegram 机器人')
         await client.start(bot_token=required('TG_BOT_TOKEN'))
+        try:
+            await asyncio.to_thread(register_commands, required('TG_BOT_TOKEN'), owner)
+            logger.info('Telegram 命令菜单已更新')
+        except RuntimeError:
+            logger.warning('Telegram 命令菜单更新失败，可直接输入命令继续')
         logger.info('Telegram 已连接 | 开始存储账号授权')
         access_token = await (google_login(client, owner) if provider == "google" else cached_login(client, owner))
         logger.info('等待选择文件 | %s 秒内回复附件 /select', wait)
