@@ -15,7 +15,7 @@
 
 ## 环境变量
 
-凭据和目标地址存入 Repository secrets；并发数、等待秒数存入 Repository variables。本地使用同名环境变量。
+凭据和目标地址存入 Repository secrets；网盘类型、并发数、等待秒数存入 Repository variables。本地使用同名环境变量。
 
 ### Telegram
 
@@ -66,11 +66,11 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 ### Google Drive（可选）
 
-所有项目同样填入 Repository secrets；本地填 `.ven.local`。默认仍为 OneDrive。
+`STORAGE_PROVIDER` 填入 Repository variables，其余 Google 配置填入 Repository secrets；本地填 `.ven.local`。默认仍为 OneDrive。
 
 | 变量 | 位置 | 获取步骤 / 默认值 |
 | --- | --- | --- |
-| `STORAGE_PROVIDER` | Secret | `onedrive`（默认）或 `google`；选择 `google` 后无需微软客户端配置 |
+| `STORAGE_PROVIDER` | Variable | `onedrive`（默认）或 `google`；选择 `google` 后无需微软客户端配置 |
 | `GOOGLE_CLIENT_ID` | Secret | [Google Cloud Console](https://console.cloud.google.com/) → 新建项目 → 启用 [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com) → [Google Auth Platform](https://console.cloud.google.com/auth/clients) → 创建 **桌面应用** OAuth 客户端 → 客户端 ID |
 | `GOOGLE_CLIENT_SECRET` | Secret | 同一桌面客户端 → 下载 JSON → 复制 `client_secret` |
 | `GOOGLE_REDIRECT_URI` | Secret | 默认 `http://localhost:8080`，桌面应用使用 localhost 回调；登录后复制地址栏完整 URI 发回 TG |
