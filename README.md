@@ -13,6 +13,8 @@
 
 机器人只接受指定用户私聊中的 `/select`，其他用户不会触发下载。同一个仓库的工作流串行运行。不要让其他程序同时使用此机器人处理更新。
 
+工作流默认 `auth_mode=configured`，读取仓库 Variable `AUTH_MODE`（未设置时为 `oauth`）。运行时目录及等待秒数留空，则分别使用 Variables `TARGET_FOLDER` 和 `WAIT_SECONDS`。`OAUTH_REDIRECT_URI`、`OAUTH_WAIT_SECONDS`、`SHAREPOINT_SITE_URL` 也使用同名 Variables；凭据通过 Secrets 注入。
+
 ## 通过 Telegram 完成 OAuth 登录（默认）
 
 1. 在 Microsoft Entra 应用注册中添加回调 URI `http://localhost`。公共客户端选择“移动和桌面应用”；机密客户端选择“Web”并填写 `CLIENTSECRET`。不使用 SPA 或隐式授权模式。
